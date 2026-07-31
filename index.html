@@ -1,1 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32 5-Servo Control 3D</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #1a1a2e; color: #fff; text-align: center; margin: 0; padding: 15px; }
+    .layout { display: flex; flex-wrap: wrap; gap: 15px; max-width: 1100px; margin: auto; justify-content: center; }
+    .card { background: #22223b; padding: 15px; border-radius: 12px; flex: 1; min-width: 320px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+    h2 { color: #00d2ff; margin-top: 0; font-size: 1.3em; }
+    #canvas3d { width: 100%; height: 380px; border-radius: 8px; background: #0f0f1b; }
+    .status-box { padding: 10px; border-radius: 8px; font-weight: bold; margin-bottom: 15px; background: #4a4e69; font-size: 1em; }
+    .btn-group { display: flex; gap: 10px; justify-content: center; margin-bottom: 15px; }
+    .btn { background: #00d2ff; color: #1e1e2f; border: none; padding: 12px; font-size: 14px; font-weight: bold; border-radius: 8px; cursor: pointer; flex: 1; transition: 0.2s; }
+    .btn:active { transform: scale(0.98); }
+    .btn-record { background: #ff4757; color: #fff; }
+    .btn-play { background: #2ed573; color: #fff; }
+    .slider-container { margin: 8px 0; text-align: left; background: #1f1f33; padding: 8px 12px; border-radius: 6px; }
+    label { font-size: 0.85em; color: #00d2ff; font-weight: bold; display: flex; justify-content: space-between; }
+    input[type=range] { width: 100%; margin-top: 6px; accent-color: #00d2ff; }
+    .val-txt { color: #aaa; font-weight: normal; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- VISUALIZADOR 3D -->
+    <div class="card">
+      <h2>Visualizador 3D (5 Servos)</h2>
+      <div id="canvas3d"></div>
+    </div>
 
+    <!-- PANEL DE CONTROL -->
+    <div class="card">
+      <h2>Control de Servos</h2>
+      <div class="status-box" id="estadoTxt">Esperando conexión con el ESP32...</div>
+
+      <div class="btn-group">
+        <button class="btn btn-record" onclick="enviarAccion('grabar')">🔴 Grabar / Detener</button>
+        <button class="btn btn-play" onclick="enviarAccion('reproducir')">▶️ Play / Loop / Stop</button>
+      </div>
+
+      <div id="slidersGroup"></div>
+    </div>
+  </div>
+
+  <script>
+    // Generar sliders automáticamente para los 5 servos
+    const container = document.getElementById('slidersGroup');
+    for (let i = 0; i < 5; i++) {
+      container.innerHTML += `
+        <div class="slider-container">
+          <label>Servo ${i + 1} <span class="val-txt"><span id="valUs${i}">1500</span> us</span></label>
+          <input type="range" id="sliderServo${i}" min="850" max="2150" value="1500" oninput="moverServoWeb(${i}, this.value)">
+        </div>
+      `;
+    }
+
+    // --- ESCENA THREE.JS (BRAZO DE 5 ARTICULACIONES) ---
+    const container3d = document.getElementById('canvas3d');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, container3d.clientWidth / container3d.clientHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    
+    renderer.setSize(container3d.clientWidth, container3d.clientHeight);
+    container3d.appendChild(renderer.domElement);
+
+    // Luces y grilla
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0x00d2ff, 0.8);
+    dirLight.position.set(10, 20, 15);
+    scene.add(dirLight);
+    scene.add(new THREE.GridHelper(20, 20, 0x00d2ff, 0x333355));
+
+    // Estructura 3D
+    const matBase = new THREE.MeshPhongMaterial({ color: 0x444466 });
+    const matJoint = new THREE.MeshPhongMaterial({ color: 0x00d2ff });
+    const matArm = new THREE.MeshPhongMaterial({ color: 0xff4757 });
+
+    const baseGroup = new THREE.Group();
+    baseGroup.add(new THREE.Mesh(new THREE.CylinderGeometry(2, 2.5, 0.8, 16), matBase));
+    scene.add(baseGroup);
+
+    const joint2 = new THREE.Group();
+    joint2.position.y = 0.8;
+    baseGroup.add(joint2);
+    const arm1 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 3, 0.6), matArm);
+    arm1.position.y = 1.5;
+    joint2.add(arm1);
+
+    const joint3 = new THREE.Group();
+    joint3.position.y = 3;
+    joint2.add(joint3);
+    const arm2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.5, 0.5), matJoint);
+    arm2.position.y = 1.25;
+    joint3.add(arm2);
+
+    const joint4 = new THREE.Group();
+    joint4.position.y = 2.5;
+    joint3.add(joint4);
+    const arm3 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1.5, 0.4), matArm);
+    arm3.position.y = 0.75;
+    joint4.add(arm3);
+
+    const joint5 = new THREE.Group();
+    joint5.position.y = 1.5;
+    joint4.add(joint5);
+    const gripper = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.3, 0.3), matJoint);
+    gripper.position.y = 0.2;
+    joint5.add(gripper);
+
+    camera.position.set(8, 8, 12);
+    camera.lookAt(0, 3, 0);
+
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    function usToRad(us) {
+      return ((us - 850) / (2150 - 850)) * Math.PI - (Math.PI / 2);
+    }
+
+    function actualizarModelo3D(usArr) {
+      baseGroup.rotation.y = usToRad(usArr[0]);
+      joint2.rotation.z = usToRad(usArr[1]);
+      joint3.rotation.z = usToRad(usArr[2]);
+      joint4.rotation.z = usToRad(usArr[3]);
+      joint5.rotation.x = usToRad(usArr[4]);
+    }
+
+    function actualizarEstado() {
+      fetch('/status')
+        .then(res => res.json())
+        .then(data => {
+          let txt = "Estado: " + data.estado;
+          if(data.modoLoop) txt += " (LOOP)";
+          txt += "<br><small>Pasos: " + data.pasos + " / " + data.maxPasos + "</small>";
+          document.getElementById('estadoTxt').innerHTML = txt;
+          
+          actualizarModelo3D(data.us);
+
+          data.us.forEach((val, i) => {
+            document.getElementById('valUs' + i).innerText = val;
+            let slider = document.getElementById('sliderServo' + i);
+            if (!slider.matches(':focus')) {
+              slider.value = val;
+            }
+          });
+        })
+        .catch(err => {
+          document.getElementById('estadoTxt').innerHTML = "⚠️ Desconectado del ESP32";
+        });
+    }
+
+    function enviarAccion(act) {
+      fetch('/cmd?action=' + act).catch(() => {});
+    }
+
+    function moverServoWeb(id, val) {
+      document.getElementById('valUs' + id).innerText = val;
+      fetch('/cmd?action=servo&id=' + id + '&val=' + val).catch(() => {});
+    }
+
+    setInterval(actualizarEstado, 200);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = container3d.clientWidth / container3d.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(container3d.clientWidth, container3d.clientHeight);
+    });
+  </script>
+</body>
+</html>
